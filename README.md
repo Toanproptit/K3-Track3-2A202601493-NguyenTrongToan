@@ -51,8 +51,8 @@ Xem **[RUBRIC.md](RUBRIC.md)** để biết tiêu chí đánh giá và thang đi
 | **Neo4j AuraDB** (hoặc Neo4j 5.x) | ✅ Có | Lưu trữ Knowledge Graph & Cypher traversal |
 | **Python 3.10+ / Colab** | ✅ Có | Môi trường thực thi Notebook |
 | `HF_TOKEN` | ✅ Có | Stream dataset từ Hugging Face (`HackerNoon`) |
-| `GROQ_API_KEY` | ✅ Có | Coreference, NER+RE Extraction, Seed Extraction, Generator |
-| `OPENAI_API_KEY` | ⚠️ Có thể thay thế | LLM-as-a-Judge (có thể cấu hình dùng Groq hoặc OpenAI) |
+| `OPENROUTER_API_KEY` | ✅ Có | Coreference, NER+RE Extraction, Seed Extraction, Generator và Judge |
+| `OPENAI_API_KEY` | ⚠️ Tuỳ chọn | Chỉ cần nếu không dùng OpenRouter cho LLM-as-a-Judge |
 
 ### Cấu hình Secrets (Colab Secrets hoặc `.env`)
 
@@ -64,12 +64,14 @@ NEO4J_USER=neo4j
 NEO4J_PASSWORD=<your-password>
 NEO4J_DATABASE=neo4j
 
-GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.3-70b-versatile
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct
+OPENROUTER_SITE_URL=                # tuỳ chọn
+OPENROUTER_APP_NAME=GraphRAG_vs_FlatRAG_Lab
 
-JUDGE_PROVIDER=openai               # 'openai' hoặc 'groq'
-JUDGE_MODEL=gpt-4o-mini             # hoặc llama-3.3-70b-versatile
-OPENAI_API_KEY=sk-...
+JUDGE_PROVIDER=openrouter           # 'openrouter', 'openai' hoặc 'groq'
+JUDGE_MODEL=meta-llama/llama-3.3-70b-instruct
+OPENAI_API_KEY=                     # chỉ cần khi JUDGE_PROVIDER=openai
 
 HF_TOKEN=hf_...                     # Hugging Face User Access Token
 ```
@@ -118,9 +120,10 @@ jupyter lab Day19_GraphRAG_vs_FlatRAG_Production_Lab_Guide.ipynb
 
 ## 🛡️ Scale Guard (Quy tắc an toàn dữ liệu trong Lab)
 
-Trong thời lượng 2 giờ, để tránh cạn kiệt rate limit hoặc tràn bộ nhớ:
-- `LAB_MAX_ARTICLES = 1500` (Số bài báo tối đa)
-- `LAB_MAX_CHUNKS = 3000` (Số chunk văn bản tối đa)
+Trong thời lượng 2 giờ, để tránh cạn kiệt rate limit hoặc tràn bộ nhớ. Bản notebook này áp dụng giới hạn 5.000 theo yêu cầu của mentor:
+- `LAB_MAX_ARTICLES = 5000` (Số bài báo tối đa)
+- `RAG_MAX_CHUNKS = 5000` (Số chunk tối đa đưa vào Flat RAG)
+- `LAB_MAX_CHUNKS = RAG_MAX_CHUNKS`
 - `EXTRACTION_MAX_CHUNKS = 400` (Số chunk trích xuất đồ thị)
 - `CHUNK_WORDS = 220`, `CHUNK_OVERLAP_WORDS = 40`
 

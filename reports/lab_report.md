@@ -1,122 +1,137 @@
-# Báo Cáo Thực Hành & Thuyết Minh Kỹ Thuật — Lab 19: GraphRAG vs Flat RAG
+# Báo cáo thực hành & thuyết minh kỹ thuật — Lab 19
 
-**Học viên:** [Họ và Tên]  
+**Học viên:** Nguyễn Trọng Toàn
 **Khóa học:** AICB-K34 · Track 3: GraphRAG  
-**Ngày thực hiện:** [Ngày/Tháng/Năm]  
+**Ngày thực hiện:** 19/08/2026
+**Trạng thái:** Đã hoàn thành preprocessing và cấu hình pipeline; benchmark LLM đang chờ quota Groq được làm mới.
 
----
+## PHẦN 1 — THUYẾT MINH KỸ THUẬT & PHÂN TÍCH CA LỖI
 
-## 📌 PHẦN 1: THUYẾT MINH KỸ THUẬT & PHÂN TÍCH CA LỖI
+### 1. Coreference Resolution
 
-### 1. Coreference Resolution (Phân giải đại từ)
-> **Tình huống thực tế:** Nêu ít nhất 1 tình huống cụ thể trong dữ liệu HackerNoon mà cơ chế Coreference Resolution phân giải sai hoặc gặp khó khăn. Hậu quả của nó đối với Knowledge Graph là gì?
+Pipeline chỉ thay thế đại từ khi tiền ngữ xuất hiện rõ trong cùng chunk. Các cụm như “the company”, “it” hoặc “they” có thể tham chiếu nhiều công ty trong cùng một bài; khi không chắc chắn, hệ thống giữ nguyên câu và ghi `unresolved_mentions`.
 
-*Trả lời:*
-- **Ví dụ từ dữ liệu:** [Trích dẫn chunk_id hoặc câu văn cụ thể]
-- **Hiện tượng:** [Ví dụ: 'The company' bị nhầm sang công ty được nhắc đến ở câu trước thay vì chủ ngữ chính]
-- **Hậu quả đối với Graph:** [Ví dụ: Tạo ra False Edge gán nhầm sự kiện M&A cho đối thủ cạnh tranh]
-
----
+Đây là lựa chọn ưu tiên precision: một lần resolve sai có thể tạo false edge, ví dụ gán quan hệ `ACQUIRED` cho công ty đối thủ. Trong báo cáo cuối cần bổ sung `chunk_id` và câu văn cụ thể từ `coref_df` sau khi quota Groq được làm mới.
 
 ### 2. Entity Resolution Threshold & Lexical Guard
-> **Ngưỡng & Cơ chế Guard:** Bạn chọn ngưỡng cosine similarity là bao nhiêu cho vector matching? Trích dẫn 1 cặp thực thể có độ tương đồng vector cao ($> 0.85$) nhưng bị Lexical Guard chặn không cho gộp (Reject) và giải thích lý do.
 
-*Trả lời:*
-- **Ngưỡng cosine similarity:** `threshold = ...` (ví dụ: 0.90)
-- **Cặp thực thể bị Guard chặn:** `[Thực thể A]` vs `[Thực thể B]` (Ví dụ: `Sam Altman` vs `Steve Altman` hoặc `Apple` vs `Apple Music`)
-- **Lý do chặn:** [Lý do ngữ nghĩa tại sao không được gộp 2 thực thể này]
+- **Cosine threshold:** `0.90`.
+- **Lexical guard:** sau khi bỏ hậu tố pháp lý (`Inc`, `Corp`, `Ltd`, …), `SequenceMatcher` phải đạt ít nhất `0.72`.
+- **Audit decision:** `MERGE_MANUAL`, `MERGE_VECTOR` hoặc `REJECT_GUARD`.
 
----
+Ví dụ cần giữ tách biệt là `Apple` và `Apple Music`, hoặc `Sam Altman` và một người khác có tên gần giống. Embedding có thể cao vì cùng ngữ cảnh công nghệ, nhưng lexical guard ngăn việc hợp nhất hai thực thể khác bản chất. Quyết định này giảm false merge dù có thể làm giảm recall.
 
-### 3. Đồ thị & Super-node Mitigation
-> **Đặc trưng đồ thị & Cắt tỉa cạnh:** Top 3 thực thể có bậc (degree) cao nhất trong đồ thị là gì? Việc ưu tiên lấy $N$ cạnh ($N=50$) có `published_date` mới nhất tại các Super-node mang lại ưu điểm gì và có rủi ro tiềm ẩn nào?
+### 3. Super-node Mitigation
 
-*Trả lời:*
-- **Top 3 Super-nodes:**
+Chính sách trong notebook:
 
-| Hạng | Tên thực thể | Loại thực thể (Type) | Bậc kết nối (Degree) |
-|------|--------------|---------------------|----------------------|
-| 1 | | | |
-| 2 | | | |
-| 3 | | | |
+| Tham số | Giá trị | Ý nghĩa |
+|---|---:|---|
+| `SUPER_NODE_DEGREE` | 100 | Node có degree lớn hơn mức này được xem là super-node |
+| `SUPER_NODE_EDGE_CAP` | 50 | Chỉ lấy tối đa 50 cạnh mới nhất từ super-node |
+| `GLOBAL_EDGE_CAP` | 250 | Giới hạn tổng số cạnh trong một context |
+| `MAX_GRAPH_CONTEXT_CHARS` | 14.000 | Chặn độ dài context trước khi gửi LLM |
 
-- **Ưu điểm & Rủi ro của Temporal Mitigation:**
-  - *Ưu điểm:* [Giảm thiểu bùng nổ context, giữ lại thông tin cập nhật nhất...]
-  - *Rủi ro:* [Nếu câu hỏi liên quan đến sự kiện lịch sử trong quá khứ xa có thể bị cắt mất...]
+Top-3 node và degree thực tế chưa thể ghi nhận vì lần chạy bị dừng trước khi hoàn tất extraction/ingestion. Sau lần chạy thành công, bảng `top_degree_df` và output của `test_supernode_policy()` phải được chép vào đây.
 
----
+Ưu điểm của việc ưu tiên `published_date` mới nhất là context nhỏ và phù hợp câu hỏi hiện tại. Rủi ro là câu hỏi lịch sử có thể cần cạnh cũ đã bị cắt. Vì vậy, cap là biện pháp kiểm soát chi phí chứ không phải giả định rằng dữ liệu cũ không còn giá trị.
 
-### 4. So sánh Thực nghiệm (Flat RAG vs GraphRAG)
+### 4. So sánh Flat RAG và GraphRAG
 
-#### Bảng tổng hợp Benchmark (LLM-as-a-Judge):
+#### Số liệu đã xác minh
 
-| Tiêu chí đánh giá | Flat RAG | GraphRAG | Độ chênh lệch ($\Delta$) | Nhận xét phân tích |
-|-------------------|----------|----------|--------------------------|-------------------|
-| **Comprehensiveness (1–5)** | | | | |
-| **Faithfulness (1–5)** | | | | |
-| **Multi-hop Reasoning (1–5)** | | | | |
-| **Latency trung bình (s)** | | | | |
-| **Token usage trung bình** | | | | |
+- Dataset đầu vào: **5.000 dòng**.
+- Kích thước file: **2,92 MB**.
+- Cột thực tế: `companyName`, `companyUrl`, `published_at`, `url`, `title`, `main_image`, `description`.
+- Flat RAG được cấu hình tối đa **5.000 chunks**.
+- Neo4j connectivity: **OK**.
+- Model Groq cũ `llama-3.3-70b-versatile` trả `404 model_not_found`; đã chuyển sang `openai/gpt-oss-120b`.
+- Request thử với model mới: **OK**.
 
-#### Phân tích 2 Ca lỗi Điển hình:
-1. **Ca lỗi Flat RAG thất bại (GraphRAG thành công):**
-   - *Question ID & Câu hỏi:* 
-   - *Tại sao Flat RAG thất bại?* [Ví dụ: Vector search không kết nối được 2 chunks chứa thông tin rời rạc...]
-   - *GraphRAG đã giải quyết như thế nào?* [Ví dụ: Graph traversal qua cạnh A -> B -> C...]
-2. **Ca lỗi GraphRAG thất bại (hoặc cả hai cùng sai):**
-   - *Question ID & Câu hỏi:* 
-   - *Nguyên nhân:* [Ví dụ: Thiếu seed entity, missing edge trong bước extraction, hoặc super-node cap cắt mất cạnh...]
-   - *Đề xuất khắc phục:* [...]
+#### Bảng benchmark
 
----
+| Metric | Flat RAG | GraphRAG | Chênh lệch | Trạng thái |
+|---|---:|---:|---:|---|
+| Comprehensiveness | Chưa đo | Chưa đo | — | Chờ LLM Judge |
+| Faithfulness | Chưa đo | Chưa đo | — | Chờ LLM Judge |
+| Multi-hop reasoning | Chưa đo | Chưa đo | — | Chờ LLM Judge |
+| Latency trung bình | Chưa đo | Chưa đo | — | Chờ evaluation |
+| Token usage trung bình | Chưa đo | Chưa đo | — | Chờ evaluation |
 
-### 5. Đánh đổi (Trade-offs) & Kiểm soát AI Coding Agent
-> **Trade-offs, Agent Control & Scale 350MB:** 
-> - So sánh sự đánh đổi giữa GraphRAG vs Flat RAG về Latency, Token và Indexing Overhead.
-> - Trong lúc làm bài, AI Coding Agent từng đề xuất điều gì mà bạn **từ chối áp dụng**? Tại sao?
-> - Nếu scale lên toàn bộ 350MB (~100,000 bài báo), bottleneck đầu tiên ở đâu và giải pháp xử lý là gì?
+Lý do chưa có điểm là Groq đã trả `429 RateLimitError`: tổ chức đã dùng `199.722/200.000` token/ngày. Không ghi điểm giả vào báo cáo; khi quota reset, chạy lại cell evaluation và cập nhật bảng này từ hai file CSV.
 
-*Trả lời:*
-- **Đánh đổi Quality vs Cost vs Latency:** [...]
-- **Quyết định từ chối AI Coding Agent:** [Ví dụ: Từ chối thuật toán $O(N^2)$ pairwise cosine trên toàn bộ dataset vì gây tràn RAM/OOM...]
-- **Giải pháp scale 350MB:** [Ví dụ: Async batch extraction với worker queue, HNSW index với blocking cho Entity Resolution, Community Partitioning...]
+#### Hai ca lỗi
 
----
+1. **Schema mismatch ở preprocessing:** dataset dùng cột `description`, trong khi loader ban đầu chỉ tìm `text/content/article/body/story`, gây `KeyError`. Đã sửa loader để nhận `description` và dùng `published_at` làm ngày xuất bản.
 
-## 📌 PHẦN 2: SUY NGẪM & KẾ HOẠCH ĐỒ ÁN (Reflection & Action Plan)
+2. **Rate limit khi extraction:** extraction gửi quá nhiều request 400 chunks qua LLM, sau đó bị giới hạn token ngày. Root cause là chi phí prompt lớn cộng với retry; hướng khắc phục là chạy theo checkpoint nhỏ, giảm batch/chunk trong smoke test, dùng model phù hợp và không chạy lại toàn bộ khi checkpoint còn dùng được.
 
-### 1. Mapping Bài giảng vào Code
-| Khái niệm trong bài giảng | Module tương ứng | Hàm / Khối code cụ thể | Quan sát thực tế & Đánh giá |
-|--------------------------|------------------|------------------------|-----------------------------|
-| **Conservative Coreference** | Module 1 | `resolve_coref_batch()` | ... |
-| **Schema & Allowlist Guard** | Module 2 | `ALLOWED_NODE_TYPES`, `ALLOWED_RELATIONS` | ... |
-| **Bulk Cypher Ingestion** | Module 2 | `bulk_insert_nodes()`, `bulk_insert_edges()` | ... |
-| **Entity Resolution & Union-Find** | Module 3 | `build_resolution_map()`, `UF` | ... |
-| **Super-node Degree Cap** | Module 4 | `retrieve_graph_context()` | ... |
-| **LLM-as-a-Judge Evaluation** | Module 5 | `judge_answer()` | ... |
+### 5. Trade-offs, Agent Control & Scale 350 MB
 
----
+Flat RAG có indexing đơn giản, latency thấp và token context dễ dự đoán. GraphRAG tốn thêm chi phí NER/RE, entity resolution và Neo4j traversal, nhưng có lợi thế trong câu hỏi multi-hop và cross-document. Graph context phải bị giới hạn bởi degree cap, edge cap và character cap.
 
-### 2. Quá trình Debugging & Bài học
-- **Lỗi kỹ thuật phức tạp nhất gặp phải:** [...]
-- **Cách bạn đã xử lý thành công:** [...]
+Quyết định kiểm soát AI Coding Agent là không chấp nhận xử lý pairwise cosine `O(N²)` trên toàn bộ dataset; thay vào đó dùng FAISS ANN, threshold `0.90`, lexical guard và audit log. Đây là trade-off rõ ràng giữa recall và khả năng chạy ổn định.
 
----
+Khi scale lên 350 MB, bottleneck đầu tiên là LLM extraction và rate limit, sau đó là embedding/indexing. Kiến trúc nên dùng queue + retry/backoff, checkpoint theo batch, ANN/HNSW cho entity resolution, bulk `UNWIND` và community partitioning.
 
-### 3. Kế hoạch Áp dụng vào Đồ án Thực tế (Action Plan)
-- **Tên đồ án / Dự án:** [Tên dự án]
-- **Đặc thù bài toán & Lý do chọn giải pháp:** [Tại sao bài toán của bạn cần GraphRAG hay chỉ cần Flat/Hybrid RAG?]
-- **Cấu trúc Node & Relation dự kiến:**
-  - Nodes: `...`
-  - Relations: `...`
-- **Chiến lược xử lý Super-node & Entity Resolution:** [...]
+## PHẦN 2 — REFLECTION & ACTION PLAN
 
----
+### 1. Mapping bài giảng vào code
 
-## 🎯 TỰ ĐÁNH GIÁ
-| Tiêu chí | Điểm tự chấm (1–5) | Ghi chú |
-|----------|-------------------|---------|
-| Mức độ hiểu bài giảng GraphRAG | | |
-| Khả năng kiểm soát AI Coding Agent | | |
-| Chất lượng đồ thị tri thức xây dựng | | |
-| Khả năng phân tích và debug hệ thống | | |
+| Khái niệm | Module | Hàm/khối code | Quan sát |
+|---|---|---|---|
+| Conservative Coreference | 1 | `resolve_coref_batch`, `run_coref` | Ambiguity được ghi vào `unresolved_mentions` |
+| Schema & Allowlist Guard | 2 | `ALLOWED_NODE_TYPES`, `ALLOWED_RELATIONS` | Loại relation/entity ngoài schema |
+| Bulk Cypher Ingestion | 2 | `bulk_insert_nodes`, `bulk_insert_edges` | Dùng `UNWIND`, batch 1.000 |
+| Entity Resolution | 3 | `build_resolution_map`, `UF` | ANN + lexical guard + audit |
+| Super-node Degree Cap | 4 | `retrieve_graph_context` | Degree >100 chỉ lấy tối đa 50 cạnh |
+| LLM-as-a-Judge | 5 | `judge_answer`, `run_evaluation` | Chấm completeness, faithfulness, multi-hop |
+
+### 2. Quá trình debugging & bài học
+
+Các lỗi thực tế đã gặp:
+
+- Cell chẩn đoán `HF_TOKEN` thiếu dấu ngoặc đóng, gây `SyntaxError`; đã sửa thành `bool(HF_TOKEN))`.
+- Dataset gated yêu cầu tài khoản Hugging Face phải bấm Agree/Access.
+- Dataset thực tế dùng `description`, không dùng `text`; loader đã được mở rộng.
+- Model Groq cũ bị deprecate/không còn truy cập; đã đổi sang `openai/gpt-oss-120b`.
+- Chạy extraction lớn làm chạm quota token; cần checkpoint và không retry mù trên toàn bộ dataset.
+
+Bài học chính là phải kiểm tra schema và quota trước khi chạy pipeline dài. Một smoke test nhỏ nên được chạy trước khi gửi hàng trăm request.
+
+### 3. Kế hoạch áp dụng vào đồ án
+
+**Tên dự án:** Trợ lý hỏi đáp tin tức và doanh nghiệp công nghệ.
+
+**Lý do chọn Hybrid RAG:** Flat RAG đủ cho factoid đơn giản; GraphRAG cần thiết khi câu hỏi nối nhiều công ty, người, sản phẩm và sự kiện theo thời gian.
+
+**Nodes dự kiến:** `Company`, `Person`, `Technology`, `Article`, `Topic`.
+
+**Relations dự kiến:** `FOUNDED`, `ACQUIRED`, `INVESTED_IN`, `DEVELOPED`, `WORKED_AT`, `USES`, `PARTNERED_WITH`, `MENTIONS`.
+
+**Entity Resolution:** alias thủ công cho ticker/tên phổ biến, FAISS ANN để lấy candidate, lexical guard để chặn false merge và audit toàn bộ quyết định.
+
+**Super-node:** degree trên 100 được cắt còn 50 cạnh mới nhất; toàn context không vượt 250 cạnh/14.000 ký tự. Các truy vấn lịch sử cần route riêng để không làm mất dữ liệu cũ.
+
+## TỰ ĐÁNH GIÁ
+
+| Tiêu chí | Điểm (1–5) | Ghi chú |
+|---|---:|---|
+| Hiểu bài giảng GraphRAG | 4 | Nắm được retrieval, schema, provenance và failure modes |
+| Kiểm soát AI Coding Agent | 4 | Có giới hạn 5.000 dòng, ANN, batch và retry |
+| Chất lượng đồ thị | 3 | Schema/policy đã thiết kế; cần hoàn tất extraction thực tế |
+| Phân tích và debug | 4 | Đã truy vết các lỗi gated access, schema, model và quota |
+
+## CHECKPOINT CẦN HOÀN TẤT TRƯỚC KHI NỘP
+
+Sau khi quota Groq reset, cần chạy lại:
+
+```python
+validate_golden(golden_df, require_answers=True)
+eval_results_df = run_evaluation(golden_df)
+comparison_df = comparison_table(eval_results_df)
+eval_results_df.to_csv(OUTPUT_DIR / "graphrag_eval_results.csv", index=False)
+comparison_df.to_csv(OUTPUT_DIR / "graphrag_vs_flatrag_summary.csv", index=False)
+```
+
+Sau đó bổ sung top-3 super-node, reference answers G02–G05 và các số liệu benchmark vào những bảng đang ghi “Chưa đo”.
